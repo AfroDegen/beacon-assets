@@ -181,10 +181,7 @@ def crawl(start_url: str, max_pages: int = 25) -> list[dict]:
                         queue.append(link)
                         queued.add(link)
 
-            # HTML is useful during the extraction phase,
-            # but we don't want to keep it in the final crawl result.
-            page.pop("html", None)
-
+           
             pages.append(page)
 
     return pages
