@@ -1,74 +1,117 @@
-from http.server import BaseHTTPRequestHandler
 import json
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 from app.crawler import crawl
+from app.extractor import extract_images_from_page
 
 
 class handler(BaseHTTPRequestHandler):
+
+    def send_json(self, status_code: int, payload: dict):
+        body = json.dumps(
+            payload,
+            indent=2,
+            ensure_ascii=False
+        ).encode("utf-8")
+
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+
+        self.wfile.write(body)
 
     def do_GET(self):
         parsed = urlparse(self.path)
 
         if parsed.path != "/api/crawl":
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-
-            self.wfile.write(
-                json.dumps({
+            self.send_json(
+                404,
+                {
                     "error": "Use /api/crawl?url=https://example.com"
-                }).encode("utf-8")
+                }
             )
-
             return
 
         params = parse_qs(parsed.query)
         urls = params.get("url")
 
         if not urls:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-
-            self.wfile.write(
-                json.dumps({
+            self.send_json(
+                400,
+                {
                     "error": "Missing url parameter"
-                }).encode("utf-8")
+                }
             )
-
             return
 
+        target_url = urls[0]
+
         try:
-            pages = crawl(urls[0], max_pages=25)
+            # ---------------------------------------------
+            # 1. Crawl website
+            # ---------------------------------------------
+
+            pages = crawl(
+                target_url,
+                max_pages=25
+            )
+
+            # ---------------------------------------------
+            # 2. Extract image assets from every page
+            # ---------------------------------------------
+
+            assets = []
+
+            for page in pages:
+                page_assets = extract_images_from_page(page)
+                assets.extend(page_assets)
+
+            # ---------------------------------------------
+            # 3. Deduplicate assets across pages
+            # ---------------------------------------------
+
+            unique_assets = []
+            seen = set()
+
+            for asset in assets:
+                asset_url = asset["url"]
+
+                if asset_url in seen:
+                    continue
+
+                seen.add(asset_url)
+                unique_assets.append(asset)
+
+            # ---------------------------------------------
+            # 4. Build response
+            # ---------------------------------------------
 
             response = {
-                "url": urls[0],
+                "site": target_url,
                 "page_count": len(pages),
-                "pages": pages,
+                "asset_count": len(unique_assets),
+                "pages": [
+                    {
+                        "url": page["url"],
+                        "final_url": page["final_url"],
+                        "status": page["status"],
+                        "content_type": page["content_type"],
+                        "title": page["title"],
+                        "link_count": len(page["links"]),
+                    }
+                    for page in pages
+                ],
+                "assets": unique_assets,
             }
 
-            body = json.dumps(
-                response,
-                indent=2,
-                ensure_ascii=False
-            ).encode("utf-8")
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-
-            self.wfile.write(body)
+            self.send_json(200, response)
 
         except Exception as exc:
-            body = json.dumps({
-                "error": str(exc)
-            }).encode("utf-8")
-
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-
-            self.wfile.write(body)
+            self.send_json(
+                500,
+                {
+                    "error": str(exc)
+                }
+            )
